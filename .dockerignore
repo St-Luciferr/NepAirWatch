@@ -1,0 +1,9 @@
+.venv
+data
+**/__pycache__
+*.zip
+docs/*.docx
+docs/*.pptx
+docs/screenshots
+docs/figures
+docs/deck_data.json
