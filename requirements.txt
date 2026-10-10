@@ -1,0 +1,10 @@
+pyspark==3.5.3
+confluent-kafka>=2.4
+pymongo>=4.7
+streamlit>=1.40
+plotly>=6.0
+pandas>=2.2
+pyarrow>=16
+requests>=2.32
+matplotlib>=3.9
+playwright>=1.45   # optional: screenshots only
