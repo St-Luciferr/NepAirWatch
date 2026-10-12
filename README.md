@@ -30,14 +30,14 @@ bilingual advisories, historical analytics and an ML early-warning forecast.
 
 ## 2. Data sources
 
-| # | Source | Type | What | Historical | Live | Ingestion path |
-| --- | --- | --- | --- | --- | --- | --- |
-| 1 | **Open-Meteo Air-Quality + Weather API** (Copernicus CAMS model) | model, JSON | PM2.5, PM10, CO, NO₂, SO₂, O₃, dust, temperature, humidity, wind, rain, boundary-layer height; 15 cities, hourly | 365 days (`BACKFILL_DAYS`) | every 15 min | producer → Kafka `nepal.air.raw` |
-| 2 | **DoEnv Nepal AQMS** (`pollution.gov.np/gss/api`) | measured, JSON | ~30 reference stations in all 7 provinces (Ratnapark, Pulchowk, US Embassy, Biratnagar, …): PM1 / PM2.5 / PM10 every **minute** | ~3 weeks (the API keeps a rolling window, so our lake becomes the long-term archive) | every 10 min | producer → Kafka `nepal.ground.raw` |
-| 3 | **Sensor.Community** citizen sensors (SDS011) | measured, JSON + CSV | low-cost PM2.5 / PM10 sensors in Kathmandu and Madhesh, ~5-min | daily archive CSVs | every 10 min | producer → Kafka `nepal.ground.raw` |
-| 4 | **NASA FIRMS** active fires (VIIRS S-NPP / NOAA-20 / NOAA-21, MODIS) | satellite, CSV | fire hotspots (forest fires, crop-residue burning) over Nepal + the Indo-Gangetic Plain | 7 days, or any period with a free `FIRMS_MAP_KEY` | every 3 h | fetcher → **Flume** spooldir → Kafka `nepal.fires.raw` + HDFS raw zone |
-| 5 | **NASA POWER** (CERES SYN1deg + MERRA-2) | satellite / reanalysis, JSON | daily aerosol optical depth (AOD 550 nm), temperature, humidity, wind, precipitation per city | **2001 → today (25 years)** | — (batch) | bulk loader → WebHDFS → HDFS raw zone |
-| 6 | **Google News RSS** | unstructured text, XML | headlines about air pollution, haze, forest fires and brick kilns in Nepal | latest ~100 per query | every 30 min | producer → Kafka `nepal.news.raw` |
+| # | Source                                                                     | Type                         | What                                                                                                                                  | Historical                                                                           | Live         | Ingestion path                                                                  |
+| - | -------------------------------------------------------------------------- | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ | ------------ | ------------------------------------------------------------------------------- |
+| 1 | **Open-Meteo Air-Quality + Weather API** (Copernicus CAMS model)     | model, JSON                  | PM2.5, PM10, CO, NO₂, SO₂, O₃, dust, temperature, humidity, wind, rain, boundary-layer height; 15 cities, hourly                   | 365 days (`BACKFILL_DAYS`)                                                         | every 15 min | producer → Kafka`nepal.air.raw`                                              |
+| 2 | **DoEnv Nepal AQMS** (`pollution.gov.np/gss/api`)                  | measured, JSON               | ~30 reference stations in all 7 provinces (Ratnapark, Pulchowk, US Embassy, Biratnagar, …): PM1 / PM2.5 / PM10 every**minute** | ~3 weeks (the API keeps a rolling window, so our lake becomes the long-term archive) | every 10 min | producer → Kafka`nepal.ground.raw`                                           |
+| 3 | **Sensor.Community** citizen sensors (SDS011)                        | measured, JSON + CSV         | low-cost PM2.5 / PM10 sensors in Kathmandu and Madhesh, ~5-min                                                                        | daily archive CSVs                                                                   | every 10 min | producer → Kafka`nepal.ground.raw`                                           |
+| 4 | **NASA FIRMS** active fires (VIIRS S-NPP / NOAA-20 / NOAA-21, MODIS) | satellite, CSV               | fire hotspots (forest fires, crop-residue burning) over Nepal + the Indo-Gangetic Plain                                               | 7 days, or any period with a free`FIRMS_MAP_KEY`                                   | every 3 h    | fetcher →**Flume** spooldir → Kafka `nepal.fires.raw` + HDFS raw zone |
+| 5 | **NASA POWER** (CERES SYN1deg + MERRA-2)                             | satellite / reanalysis, JSON | daily aerosol optical depth (AOD 550 nm), temperature, humidity, wind, precipitation per city                                         | **2001 → today (25 years)**                                                   | — (batch)   | bulk loader → WebHDFS → HDFS raw zone                                         |
+| 6 | **Google News RSS**                                                  | unstructured text, XML       | headlines about air pollution, haze, forest fires and brick kilns in Nepal                                                            | latest ~100 per query                                                                | every 30 min | producer → Kafka`nepal.news.raw`                                             |
 
 All sources are free. Only FIRMS history beyond 7 days needs a (free) key. Volume after the first start is
 about 132,000 hourly model records, ~700,000 one-minute ground readings (growing by ~45,000 a day),
@@ -46,18 +46,18 @@ Kafka partitions, Spark executors and DataNodes.
 
 ## 3. Big-data components
 
-| Layer | Component | Role |
-| --- | --- | --- |
-| Ingestion | **Apache Kafka 3.8** (KRaft, no ZooKeeper) | 5 topics, keyed partitions, replayable log, alert fan-out (`nepal.air.alerts`) |
-| Ingestion | **Apache Flume 1.11** | Spooling-directory source → replicating selector → file channel → Kafka sink, memory channel → HDFS sink |
-| Storage | **HDFS 3.4** (NameNode + DataNode) | Data lake / master dataset: `raw/`, `lake/`, `curated/`, streaming checkpoints |
-| Storage | **Apache Cassandra 5** | Write-optimised time-series store for 1-minute ground readings, partition key `(station, day)` |
-| Storage | **MongoDB 7** | Serving layer for the dashboard; geospatial queries on fire hotspots (2dsphere) |
-| Processing (speed) | **Spark 3.5 Structured Streaming** | 4 topics, 8 queries, event-time windows + watermarks, AQI as native expressions |
-| Processing (batch) | **Spark SQL + MLlib** | Descriptive, diagnostic, predictive and prescriptive analytics; GBT forecast, RandomForest + CrossValidator calibration, KMeans, LDA |
-| Processing (batch) | **Hadoop MapReduce on YARN** (Hadoop Streaming, Python mapper/reducer) | Yearly AOD statistics per city from 25 years of NASA POWER data (`mapreduce/`) |
-| Query | **Apache Hive 4** (HiveServer2) | External tables (schema-on-read) over Parquet, CSV, JSON and MapReduce TSV in HDFS; dashboard SQL console |
-| Presentation | Streamlit + Plotly, Kafka-UI, HDFS / YARN / Spark / Hive UIs | Dashboard and ops consoles |
+| Layer              | Component                                                                    | Role                                                                                                                                 |
+| ------------------ | ---------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| Ingestion          | **Apache Kafka 3.8** (KRaft, no ZooKeeper)                             | 5 topics, keyed partitions, replayable log, alert fan-out (`nepal.air.alerts`)                                                     |
+| Ingestion          | **Apache Flume 1.11**                                                  | Spooling-directory source → replicating selector → file channel → Kafka sink, memory channel → HDFS sink                         |
+| Storage            | **HDFS 3.4** (NameNode + DataNode)                                     | Data lake / master dataset:`raw/`, `lake/`, `curated/`, streaming checkpoints                                                  |
+| Storage            | **Apache Cassandra 5**                                                 | Write-optimised time-series store for 1-minute ground readings, partition key`(station, day)`                                      |
+| Storage            | **MongoDB 7**                                                          | Serving layer for the dashboard; geospatial queries on fire hotspots (2dsphere)                                                      |
+| Processing (speed) | **Spark 3.5 Structured Streaming**                                     | 4 topics, 8 queries, event-time windows + watermarks, AQI as native expressions                                                      |
+| Processing (batch) | **Spark SQL + MLlib**                                                  | Descriptive, diagnostic, predictive and prescriptive analytics; GBT forecast, RandomForest + CrossValidator calibration, KMeans, LDA |
+| Processing (batch) | **Hadoop MapReduce on YARN** (Hadoop Streaming, Python mapper/reducer) | Yearly AOD statistics per city from 25 years of NASA POWER data (`mapreduce/`)                                                     |
+| Query              | **Apache Hive 4** (HiveServer2)                                        | External tables (schema-on-read) over Parquet, CSV, JSON and MapReduce TSV in HDFS; dashboard SQL console                            |
+| Presentation       | Streamlit + Plotly, Kafka-UI, HDFS / YARN / Spark / Hive UIs                 | Dashboard and ops consoles                                                                                                           |
 
 **Lambda architecture.** The HDFS lake is the immutable master dataset. The speed layer (Spark Structured
 Streaming) writes low-latency views to Cassandra and MongoDB. The batch layer (Spark batch, MapReduce, Hive)
@@ -110,14 +110,14 @@ The first build downloads Hadoop and Flume (~1 GB, about 5–8 min). On the firs
 5. keep polling all live sources; with `--profile full` also run the MapReduce job on YARN (`mapreduce`)
    and create the Hive tables (`hive-init`)
 
-| URL | What |
-| --- | --- |
-| <http://localhost:8501> | NepAirWatch dashboard |
-| <http://localhost:8080> | Kafka-UI (topics, partitions, messages) |
-| <http://localhost:4040> | Spark UI of the streaming job |
-| <http://localhost:9870> | HDFS NameNode UI (browse `/nepairwatch`) |
-| <http://localhost:8088> | YARN ResourceManager (MapReduce jobs) — profile `mapreduce` / `full` |
-| <http://localhost:10002> | HiveServer2 UI — profile `hive` / `full` |
+| URL                                             | What                                                                     |
+| ----------------------------------------------- | ------------------------------------------------------------------------ |
+| [http://localhost:8501](http://localhost:8501)   | NepAirWatch dashboard                                                    |
+| [http://localhost:8080](http://localhost:8080)   | Kafka-UI (topics, partitions, messages)                                  |
+| [http://localhost:4040](http://localhost:4040)   | Spark UI of the streaming job                                            |
+| [http://localhost:9870](http://localhost:9870)   | HDFS NameNode UI (browse`/nepairwatch`)                                |
+| [http://localhost:8088](http://localhost:8088)   | YARN ResourceManager (MapReduce jobs) — profile`mapreduce` / `full` |
+| [http://localhost:10002](http://localhost:10002) | HiveServer2 UI — profile`hive` / `full`                             |
 
 ```bash
 docker compose ps                                     # status of all services
@@ -135,15 +135,15 @@ docker compose down -v                                # stop and delete all data
 Settings: copy `.env.example` to `.env` and edit it (Docker Compose reads `.env` automatically),
 or set the variables in the shell.
 
-| Variable | Default | Meaning |
-| --- | --- | --- |
-| `BACKFILL_DAYS` | 365 | Open-Meteo history |
-| `GROUND_BACKFILL_DAYS` | 20 | DoEnv / Sensor.Community history |
-| `FIRMS_MAP_KEY` | — | optional FIRMS key → fire history beyond 7 days (`FIRMS_BACKFILL_DAYS`) |
-| `POWER_START_YEAR` | 2001 | first year of NASA POWER history |
-| `LIVE_INTERVAL` / `GROUND_INTERVAL` / `FIRMS_INTERVAL` / `NEWS_INTERVAL` | 900 / 600 / 10800 / 1800 s | polling intervals |
-| `BATCH_INTERVAL` / `MR_INTERVAL` | 21600 / 86400 s | Spark batch / MapReduce schedule |
-| `REPLAY_DAYS` / `REPLAY_SPEED` | 2 / 2 s | demo replay |
+| Variable                                                                         | Default                    | Meaning                                                                    |
+| -------------------------------------------------------------------------------- | -------------------------- | -------------------------------------------------------------------------- |
+| `BACKFILL_DAYS`                                                                | 365                        | Open-Meteo history                                                         |
+| `GROUND_BACKFILL_DAYS`                                                         | 20                         | DoEnv / Sensor.Community history                                           |
+| `FIRMS_MAP_KEY`                                                                | —                         | optional FIRMS key → fire history beyond 7 days (`FIRMS_BACKFILL_DAYS`) |
+| `POWER_START_YEAR`                                                             | 2001                       | first year of NASA POWER history                                           |
+| `LIVE_INTERVAL` / `GROUND_INTERVAL` / `FIRMS_INTERVAL` / `NEWS_INTERVAL` | 900 / 600 / 10800 / 1800 s | polling intervals                                                          |
+| `BATCH_INTERVAL` / `MR_INTERVAL`                                             | 21600 / 86400 s            | Spark batch / MapReduce schedule                                           |
+| `REPLAY_DAYS` / `REPLAY_SPEED`                                               | 2 / 2 s                    | demo replay                                                                |
 
 > Upgrading from v1: the alert key changed and the lake moved to HDFS, so start fresh with
 > `docker compose down -v`.
@@ -157,17 +157,17 @@ YARN and Hive are not used. Stop the app containers first so that two streaming 
 
 ## 6. Dashboard
 
-| Tab | Shows | Fed by |
-| --- | --- | --- |
-| 📡 Live monitor | AQI map, Nepali advisories, model + measured alerts, stream throughput | Spark streaming → MongoDB |
-| 🛰️ Ground stations | live station map, 1-minute and hourly charts per station, CAMS-vs-measured validation, calibrated now-cast | Cassandra, MongoDB |
-| 🏙️ City explorer | PM2.5 vs standards, boundary-layer height, daily window | MongoDB |
-| 📊 Analytics | exceedance days, seasonality, diurnal cycle, provinces, weather drivers | Spark batch |
-| 🔥 Fires & aerosols | fire map + `$geoWithin` radius query, fire↔PM2.5 correlation, 25-year AOD trend and climatology, KMeans regimes | Flume/Spark, NASA POWER, MLlib |
-| 🔮 Early warning | GBT forecast vs persistence, **recommended actions per audience** | MLlib + rules |
-| 📰 News | headlines with themes, top terms, LDA topics, coverage vs PM2.5 | Spark ML text pipeline |
-| 🐝 Hive SQL | run the example HiveQL (or your own) on HiveServer2 | Hive over HDFS |
-| ⚙️ Pipeline health | Kafka offsets, Flume counters, HDFS zones, MongoDB, per-query streaming rates, YARN jobs | all |
+| Tab                  | Shows                                                                                                             | Fed by                         |
+| -------------------- | ----------------------------------------------------------------------------------------------------------------- | ------------------------------ |
+| 📡 Live monitor      | AQI map, Nepali advisories, model + measured alerts, stream throughput                                            | Spark streaming → MongoDB     |
+| 🛰️ Ground stations | live station map, 1-minute and hourly charts per station, CAMS-vs-measured validation, calibrated now-cast        | Cassandra, MongoDB             |
+| 🏙️ City explorer   | PM2.5 vs standards, boundary-layer height, daily window                                                           | MongoDB                        |
+| 📊 Analytics         | exceedance days, seasonality, diurnal cycle, provinces, weather drivers                                           | Spark batch                    |
+| 🔥 Fires & aerosols  | fire map +`$geoWithin` radius query, fire↔PM2.5 correlation, 25-year AOD trend and climatology, KMeans regimes | Flume/Spark, NASA POWER, MLlib |
+| 🔮 Early warning     | GBT forecast vs persistence,**recommended actions per audience**                                            | MLlib + rules                  |
+| 📰 News              | headlines with themes, top terms, LDA topics, coverage vs PM2.5                                                   | Spark ML text pipeline         |
+| 🐝 Hive SQL          | run the example HiveQL (or your own) on HiveServer2                                                               | Hive over HDFS                 |
+| ⚙️ Pipeline health | Kafka offsets, Flume counters, HDFS zones, MongoDB, per-query streaming rates, YARN jobs                          | all                            |
 
 ## 7. Demo script (≈15 min)
 

@@ -3,8 +3,11 @@ FROM python:3.11-slim-bookworm
 
 RUN apt-get update \
  && apt-get install -y --no-install-recommends openjdk-17-jre-headless procps curl \
- && rm -rf /var/lib/apt/lists/*
-ENV JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64 \
+ && rm -rf /var/lib/apt/lists/* \
+ && JAVA_BIN="$(readlink -f "$(command -v java)")" \
+ && JAVA_HOME="$(dirname "$(dirname "$JAVA_BIN")")" \
+ && ln -sfn "$JAVA_HOME" /usr/lib/jvm/default-java
+ENV JAVA_HOME=/usr/lib/jvm/default-java \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1
 
