@@ -99,7 +99,12 @@ docker compose up -d --build                   # core: Kafka, Flume, HDFS, Cassa
 docker compose --profile full up -d --build    # + YARN/MapReduce and Hive   (or --profile mapreduce / --profile hive)
 ```
 
-The first build downloads Hadoop and Flume (~1 GB, about 5–8 min). On the first start the containers:
+The first build downloads Hadoop and Flume (~1 GB, about 2–5 min). The Dockerfile fetches them from fast Apache
+mirrors (`downloads.apache.org`, then Kakao and Huawei Cloud) and uses `archive.apache.org` only as a last
+resort, because the archive is throttled to ~100 KB/s and would make the build take hours. To use another
+mirror: `docker compose build --build-arg APACHE_MIRRORS="https://your.mirror/apache"`. The project images
+(`nepairwatch-app`, `-hadoop`, `-flume`) use `pull_policy: build`, so compose builds them locally and never
+tries to pull them from Docker Hub. On the first start the containers:
 
 1. start Kafka (KRaft), Kafka-UI, MongoDB, Cassandra, HDFS (NameNode + DataNode); create the topics,
    the Cassandra keyspace and the HDFS directories

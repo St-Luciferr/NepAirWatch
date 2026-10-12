@@ -21,6 +21,7 @@
 x-app: &app
   build: .
   image: nepairwatch-app:latest
+  pull_policy: build          # local image: build it, never try Docker Hub
   dns: [8.8.8.8, 1.1.1.1]   # don't depend on the host's resolver
   environment: &app-env
     KAFKA_BOOTSTRAP: kafka:29092
@@ -45,6 +46,7 @@ x-hadoop: &hadoop
     context: docker/hadoop
     target: hadoop
   image: nepairwatch-hadoop:latest
+  pull_policy: build
 
 services:
   # ======================================================================= ingestion
@@ -114,12 +116,12 @@ services:
       context: docker/hadoop
       target: flume
     image: nepairwatch-flume:latest
+    pull_policy: build
     container_name: nepair-flume
     command: ["bash", "-c", "mkdir -p /appdata/spool/firms && exec flume-ng agent -n agent -c /opt/flume/conf
-              -f /flume/flume.conf -Dflume.root.logger=INFO,console
+              -f /flume/flume.conf -Xms128m -Xmx384m -Dflume.root.logger=INFO,console
               -Dflume.monitoring.type=http -Dflume.monitoring.port=34545"]
-    environment:
-      JAVA_OPTS: -Xms128m -Xmx384m
+    # heap goes on the command line: flume-ng hard-codes JAVA_OPTS=-Xmx20m and only appends -X flags
     volumes:
       - app_data:/appdata          # shared with producer-fires (spool directory)
       - flume_data:/flume-data     # file channel
