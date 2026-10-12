@@ -30,7 +30,7 @@ from pyspark.ml.regression import GBTRegressor  # noqa: E402
 from pyspark.sql import Window  # noqa: E402
 from pyspark.sql import functions as F  # noqa: E402
 
-from spark_common import aqi_expr, build_spark, category_expr, to_mongo  # noqa: E402
+from spark_common import aqi_expr, build_spark, category_expr, not_demo, to_mongo  # noqa: E402
 from common.aqi import recommended_actions  # noqa: E402
 from common.config import (KATHMANDU_VALLEY, LAKE_PATH, MONGO_DB, MONGO_URI,  # noqa: E402
                            NEPAL_PM25_24H, TERAI, WHO_PM25_24H, ROOT)
@@ -44,7 +44,7 @@ def main():
     db = MongoClient(MONGO_URI)[MONGO_DB]
     curated = f"{LAKE_PATH}/curated"
 
-    lake = spark.read.parquet(f"{LAKE_PATH}/air_quality")
+    lake = spark.read.parquet(f"{LAKE_PATH}/air_quality").filter(not_demo())   # never learn from demo data
     # replays can re-deliver the same city-hour: deduplicate on the natural key
     df = (lake.dropDuplicates(["city", "event_ts"])
           .withColumn("hour", F.hour("event_ts"))

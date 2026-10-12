@@ -103,6 +103,11 @@ NEWS_THEMES = {
 }
 
 
+def not_demo(col="source") -> Column:
+    """True for real data. Demo-simulator rows (source "demo/…") are kept out of every batch result."""
+    return ~F.coalesce(F.col(col), F.lit("")).startswith("demo")
+
+
 def haversine_expr(lat1: Column, lon1: Column, lat2: Column, lon2: Column) -> Column:
     """Great-circle distance in km as a native Spark expression (location analytics)."""
     dlat = F.radians(lat2 - lat1)

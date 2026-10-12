@@ -35,7 +35,7 @@ from pyspark.sql import functions as F  # noqa: E402
 from pyspark.sql.streaming import StreamingQueryListener  # noqa: E402
 
 from spark_common import (FIRES_CSV_DDL, GROUND_SCHEMA, NEWS_SCHEMA, NEWS_THEMES, RAW_SCHEMA,  # noqa: E402
-                          aqi_expr, build_spark, category_expr, to_cassandra, with_nearest_city)
+                          aqi_expr, build_spark, category_expr, not_demo, to_cassandra, with_nearest_city)
 from common.config import (ALERT_AQI, CHECKPOINT_PATH, KAFKA_BOOTSTRAP, LAKE_PATH,  # noqa: E402
                            MONGO_DB, MONGO_URI, TOPIC_ALERTS, TOPIC_FIRES, TOPIC_GROUND, TOPIC_NEWS,
                            TOPIC_RAW)
@@ -94,10 +94,10 @@ def raise_alerts(alerts):
     return len(new)
 
 
-def _alert(kind, site, city, event_ts, pm25, aqi, category, what):
+def _alert(kind, site, city, event_ts, pm25, aqi, category, what, source=""):
     sev = "CRITICAL" if aqi >= 201 else "WARNING"
     return {"kind": kind, "site": site, "city": city, "event_ts": event_ts, "pm2_5": pm25, "aqi": aqi,
-            "category": category, "severity": sev,
+            "category": category, "severity": sev, "source": source,
             "message": f"{category} air {what} {site}: PM2.5 {pm25:.0f} µg/m³ (AQI {aqi}) at {event_ts:%Y-%m-%d %H:%M}"}
 
 
@@ -126,7 +126,8 @@ def write_serving(batch_df, batch_id):
             db.latest.replace_one({"_id": city}, {**d, "_id": city}, upsert=True)
 
     # alerts: AQI at/above "Unhealthy" (model data)
-    alerts = [_alert("model", d["city"], d["city"], d["event_ts"], d["pm2_5"], d["aqi"], d["category"], "in")
+    alerts = [_alert("model", d["city"], d["city"], d["event_ts"], d["pm2_5"], d["aqi"], d["category"], "in",
+                     d["source"])
               for d in rows if d["aqi"] is not None and d["aqi"] >= ALERT_AQI]
     new_alerts = raise_alerts(alerts)
     db.stream_batches.insert_one({"batch_id": int(batch_id), "records": len(rows), "alerts": len(alerts),
@@ -183,7 +184,8 @@ def write_ground_hourly(batch_df, batch_id):
     for r in batch_df.filter((F.col("aqi") >= ALERT_AQI) & (F.col("n_obs") >= 30)).collect():
         hour = r["hour"].replace(tzinfo=None)
         alerts.append({**_alert("ground", r["station"], r["city"], hour, r["pm2_5"], r["aqi"],
-                                _category(r["aqi"]), "measured at station"),
+                                _category(r["aqi"]), "measured at station",
+                                "demo" if r["network"] == "demo" else "ground"),
                        "station_id": r["station_id"], "network": r["network"]})
     new_alerts = raise_alerts(alerts)
     batch_df.unpersist()
@@ -320,8 +322,9 @@ def main():
         .option("checkpointLocation", f"{ck}/serving").trigger(processingTime="5 seconds")
         .queryName("serving_sink").start(),
     ]
-    # event-time windowed aggregation (calendar day in Nepal time, UTC+5:45)
-    daily = (parsed.withWatermark("event_ts", "3 hours")
+    # event-time windowed aggregation (calendar day in Nepal time, UTC+5:45); demo data excluded so
+    # a simulated episode never ends up in the official daily statistics
+    daily = (parsed.filter(not_demo()).withWatermark("event_ts", "3 hours")
              .groupBy(F.window("event_ts", "1 day", "1 day", "18 hours 15 minutes"), "city")
              .agg(F.round(F.avg("pm2_5"), 1).alias("pm25_avg"),
                   F.round(F.max("pm2_5"), 1).alias("pm25_max"),

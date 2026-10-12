@@ -18,8 +18,11 @@ Fuses every source in the HDFS data lake / raw zone:
   7  news              tokenise → stop words → term counts, themes, LDA topics      text analytics
 
 A section whose input is not there yet is skipped with a message, so the job is safe on day one.
-Run:  python spark_jobs/fusion_analytics.py
+Run:  python spark_jobs/fusion_analytics.py [--only-ground] [--include-demo]
+      --only-ground   just section 1 (≈1 min) — used by scripts/demo.sh to show the batch layer live
+      --include-demo  keep the demo simulator's stations in the ground views (demo only)
 """
+import argparse
 import sys
 import time
 from datetime import datetime
@@ -38,8 +41,8 @@ from pyspark.ml.tuning import CrossValidator, ParamGridBuilder  # noqa: E402
 from pyspark.sql import Window  # noqa: E402
 from pyspark.sql import functions as F  # noqa: E402
 
-from spark_common import (aqi_expr, build_spark, category_expr, path_exists, to_cassandra,  # noqa: E402
-                          to_mongo)
+from spark_common import (aqi_expr, build_spark, category_expr, not_demo, path_exists,  # noqa: E402
+                          to_cassandra, to_mongo)
 from common.config import (FIRE_NEAR_KM, LAKE_PATH, MONGO_DB, MONGO_URI, NEPAL_PM25_24H,  # noqa: E402
                            RAW_PATH, ROOT, WHO_PM25_24H)
 
@@ -57,13 +60,15 @@ def hour_key(ts_col, shift_seconds=0):
 
 
 # ----------------------------------------------------------------------------- 1 ground hourly
-def ground_views(spark, db):
+def ground_views(spark, db, include_demo=False):
     section("1. Ground stations — hourly batch view")
     path = f"{LAKE_PATH}/ground"
     if not path_exists(spark, path):
         print("  no ground data in the lake yet — skipped")
         return None
     g = spark.read.parquet(path).dropDuplicates(["station_id", "event_ts"])
+    if not include_demo:
+        g = g.filter(F.coalesce(F.col("network"), F.lit("")) != "demo")
     hourly = (g.filter(F.col("pm2_5").isNotNull())
               .withColumn("hour", F.date_trunc("hour", "event_ts"))     # Nepal clock hour (session TZ)
               .groupBy("station_id", "network", "station", "city", "hour")
@@ -205,7 +210,7 @@ def fire_analytics(spark, db, air_daily):
     if not path_exists(spark, path):
         print("  no fire data in the lake yet — skipped")
         return
-    f = spark.read.parquet(path).dropDuplicates(["fire_id"]).cache()
+    f = spark.read.parquet(path).filter(not_demo()).dropDuplicates(["fire_id"]).cache()
     near = F.col("city_km") <= FIRE_NEAR_KM
     daily = (f.groupBy("acq_date")
              .agg(F.count("*").alias("hotspots_region"), F.sum(near.cast("int")).alias("hotspots_near_cities"),
@@ -327,7 +332,7 @@ def news_analytics(spark, db, air_daily):
     if not path_exists(spark, path):
         print("  no news in the lake yet — skipped")
         return
-    news = spark.read.parquet(path).dropDuplicates(["id"]).cache()
+    news = spark.read.parquet(path).filter(~F.col("id").startswith("demo")).dropDuplicates(["id"]).cache()
     n = news.count()
     print(f"  {n} unique articles")
     tok = RegexTokenizer(inputCol="title", outputCol="tokens", pattern="[^a-zA-Z0-9.]+", minTokenLength=3)
@@ -363,14 +368,24 @@ def news_analytics(spark, db, air_daily):
 
 
 def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--only-ground", action="store_true", help="run only the ground-station batch view")
+    ap.add_argument("--include-demo", action="store_true", help="include demo-simulator stations")
+    args = ap.parse_args()
     t0 = time.time()
     spark = build_spark("NepAirWatch-Fusion", cassandra=True)
     db = MongoClient(MONGO_URI)[MONGO_DB]
-    air = (spark.read.parquet(f"{LAKE_PATH}/air_quality").dropDuplicates(["city", "event_ts"])
+    if args.only_ground:
+        ground_views(spark, db, args.include_demo)
+        print(f"\nGround batch view finished in {time.time() - t0:.1f}s")
+        spark.stop()
+        return
+    air = (spark.read.parquet(f"{LAKE_PATH}/air_quality").filter(not_demo())
+           .dropDuplicates(["city", "event_ts"])
            .withColumn("hour", F.hour("event_ts")).withColumn("month_num", F.month("event_ts")).cache())
     air_daily = air.groupBy("city", "date").agg(F.avg("pm2_5").alias("pm25_24h")).cache()
 
-    hourly = ground_views(spark, db)
+    hourly = ground_views(spark, db, args.include_demo)
     cams_vs_ground(spark, db, hourly, air)
     fire_analytics(spark, db, air_daily)
     aod_city = aod_analytics(spark, db, air_daily)

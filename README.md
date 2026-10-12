@@ -72,7 +72,7 @@ whole lake.
 
 ```text
 common/            config (cities, topics, paths), AQI + advisories + recommended actions, geo, storage (WebHDFS)
-producer/          aq_producer.py (Open-Meteo) · ground_producer.py (DoEnv + Sensor.Community)
+producer/          aq_producer.py (Open-Meteo) · ground_producer.py (DoEnv + Sensor.Community) · demo_simulator.py
                    firms_fetcher.py (NASA FIRMS → Flume) · news_producer.py (RSS) · power_loader.py (NASA POWER → HDFS)
 spark_jobs/        stream_processor.py — speed layer (8 streaming queries)
                    batch_analytics.py  — CAMS analytics, GBT forecast, prescriptive advisories
@@ -83,7 +83,8 @@ cassandra/         schema.cql
 flume/             flume.conf
 dashboard/         app.py (Streamlit, 9 tabs) · sources.py (Cassandra / Hive / YARN / Flume clients)
 docker/            hadoop/ (Hadoop 3.4 + Flume image, configs) · container entry scripts
-scripts/           local-mode scripts, wait_for_lake.py, hive_refresh.py, report/deck/diagram generators
+scripts/           demo.sh (live demo) · watch_pipeline.sh · local-mode scripts · wait_for_lake.py,
+                   hive_refresh.py · report/deck/diagram generators
 docker-compose.yml the whole platform
 ```
 
@@ -169,24 +170,32 @@ YARN and Hive are not used. Stop the app containers first so that two streaming 
 | 🐝 Hive SQL          | run the example HiveQL (or your own) on HiveServer2                                                               | Hive over HDFS                 |
 | ⚙️ Pipeline health | Kafka offsets, Flume counters, HDFS zones, MongoDB, per-query streaming rates, YARN jobs                          | all                            |
 
-## 7. Demo script (≈15 min)
+## 7. Live demo (one command)
 
-1. **Problem.** Analytics tab: days above the Nepal and WHO limits, seasonality heatmap. Fires & aerosols
-   tab: Kathmandu's mean AOD rose from 0.34 (2001) to 0.42–0.50 (2023–25), and hazy days roughly
-   doubled.
-2. **Architecture.** Walk through `docs/architecture.png`: six sources, Lambda layers.
-3. **Ingestion.** Kafka-UI: five topics. `docker compose logs flume` shows FIRMS files arriving in the
-   spool dir and fanning out to Kafka and HDFS. NameNode UI: `/nepairwatch/raw/firms/dt=…`.
-4. **Streaming.** `docker compose run --rm replay`. Live tab throughput moves; Pipeline tab shows all 8
-   queries' micro-batches.
-5. **Ground truth.** Ground stations tab: 1-minute data for Pulchowk from Cassandra; the model's bias against
-   measured PM2.5 and the CrossValidated RandomForest that corrects it.
-6. **Location analytics.** Fires within 100 km of a city (MongoDB geospatial) and fire↔PM2.5 correlation.
-7. **MapReduce + Hive.** YARN UI shows `NepAirWatch-AOD-yearly`. Hive SQL tab: run "25-year aerosol trend
-   from the MapReduce job" and "Worst 10 city-days".
-8. **Early warning.** GBT beats persistence (RMSE ≈10 vs ≈17 µg/m³); the recommended-actions panel tells
-   schools and hospitals what to do.
-9. **Text analytics.** News tab: themes, top terms, LDA topics.
+With the stack running (`docker compose --profile full up -d` is best), run:
+
+```bash
+scripts/demo.sh          # 10-minute demo   (scripts/demo.sh 15 → 15 minutes)
+scripts/demo.sh cleanup  # afterwards: remove demo data, restore the real latest values
+```
+
+It plays a scripted pollution episode **through the real pipeline**:
+clean morning → smog builds → forest fires → hazardous peak → rain clears the air.
+Every 10 s, all 15 cities and 3 demo stations get new readings with current timestamps, so the dashboard
+map changes colour continuously. Fire hotspots go through Flume, and headlines go through Kafka. On
+schedule, the script also runs the Spark batch layer, submits the MapReduce job to YARN and refreshes Hive.
+
+A tmux window shows six panes: the simulator, **cues** (what to open in which UI, and when), new Kafka
+messages, Spark micro-batches, storage counts growing, and Flume. Follow the cues: dashboard → Kafka-UI →
+Spark UI → Fires tab + HDFS browser → Ground stations (Cassandra) → YARN → Hive SQL → Pipeline health.
+
+Demo records are tagged (`source = demo/…`, network `demo`). The daily statistics and every batch
+job ignore them, so analytics and models are never affected. `cleanup` removes them from MongoDB and
+Cassandra.
+
+Other ways to show data flowing: `scripts/watch_pipeline.sh` (the same monitor panes without the
+simulator) and `docker compose run --rm replay` (re-streams 2 days of real data; the throughput bars
+move, but the map keeps the newest real hour).
 
 ## 8. Key design decisions
 

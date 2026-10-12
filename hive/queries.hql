@@ -4,6 +4,7 @@
 -- name: Worst 10 city-days of the past year (PM2.5, CAMS)
 SELECT city, `date`, ROUND(AVG(pm2_5), 1) AS pm25_24h, MAX(aqi) AS aqi_max
 FROM nepairwatch.air_quality
+WHERE source NOT LIKE 'demo%'
 GROUP BY city, `date`
 ORDER BY pm25_24h DESC
 LIMIT 10;
@@ -12,7 +13,7 @@ LIMIT 10;
 SELECT province, SUBSTR(CAST(`date` AS STRING), 1, 7) AS month,
        SUM(CASE WHEN pm25_24h > 40 THEN 1 ELSE 0 END) AS city_days_over_std, COUNT(*) AS city_days
 FROM (SELECT province, city, `date`, AVG(pm2_5) AS pm25_24h
-      FROM nepairwatch.air_quality GROUP BY province, city, `date`) d
+      FROM nepairwatch.air_quality WHERE source NOT LIKE 'demo%' GROUP BY province, city, `date`) d
 GROUP BY province, SUBSTR(CAST(`date` AS STRING), 1, 7)
 ORDER BY month, province;
 

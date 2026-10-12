@@ -35,6 +35,11 @@ CAT_COLORS = {"Good": "#00e400", "Moderate": "#e6d800", "Unhealthy for Sensitive
               "Unhealthy": "#ff0000", "Very Unhealthy": "#8f3f97", "Hazardous": "#7e0023"}
 
 
+def now_npt():
+    """Wall-clock Nepal time, matching how event times are stored (naive NPT, the Spark session zone)."""
+    return datetime.utcnow() + timedelta(hours=5, minutes=45)
+
+
 @st.cache_resource
 def db():
     return MongoClient(MONGO_URI, serverSelectionTimeoutMS=3000)[MONGO_DB]
@@ -80,7 +85,7 @@ with tab_live:
         c3.metric("Worst city", latest.iloc[0]["city"], f"AQI {latest.iloc[0]['aqi']}", delta_color="inverse")
         c4.metric("Alerts (last 24 h)", f"{alerts_24h:,}")
         c5.metric("Ground stations live", db().ground_latest.count_documents(
-            {"event_ts": {"$gte": datetime.now() - timedelta(hours=3)}}))
+            {"event_ts": {"$gte": now_npt() - timedelta(hours=3)}}))
         st.caption(f"Latest observation hour: **{newest_ts:%Y-%m-%d %H:%M} NPT** · auto-refresh every 5 s")
 
         left, right = st.columns([3, 2])
@@ -266,7 +271,7 @@ with tab_ground:
     if gl.empty:
         st.info("No ground-station data yet — start `producer-ground` and the streaming job.")
     else:
-        fresh = gl[gl["event_ts"] >= datetime.now() - timedelta(hours=3)]
+        fresh = gl[gl["event_ts"] >= now_npt() - timedelta(hours=3)]
         worst = gl.sort_values("pm2_5", ascending=False).iloc[0]
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("Stations / sensors", len(gl))
@@ -373,7 +378,7 @@ with tab_fires:
     city_names = [c[0] for c in CITIES]
     near_city = f2.selectbox("Fires near", city_names, index=city_names.index("Kathmandu"))
     radius = f3.slider("Radius (km)", 25, 300, int(FIRE_NEAR_KM), step=25)
-    fires = frame("fires", {"acq_ts": {"$gte": datetime.now() - timedelta(hours=hours)}},
+    fires = frame("fires", {"acq_ts": {"$gte": now_npt() - timedelta(hours=hours)}},
                   proj={"loc": 0})
     if fires.empty:
         st.info("No fire hotspots in the selected period (or `producer-fires` / Flume not running yet).")
@@ -381,7 +386,7 @@ with tab_fires:
         lat0, lon0 = next((la, lo) for c, _, la, lo in CITIES if c == near_city)
         # MongoDB geospatial query (2dsphere index): hotspots within the radius of the city
         near = db().fires.count_documents({
-            "acq_ts": {"$gte": datetime.now() - timedelta(hours=hours)},
+            "acq_ts": {"$gte": now_npt() - timedelta(hours=hours)},
             "loc": {"$geoWithin": {"$centerSphere": [[lon0, lat0], radius / 6378.1]}}})
         m1, m2, m3 = st.columns(3)
         m1.metric("Hotspots in region", f"{len(fires):,}")
