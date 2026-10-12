@@ -6,5 +6,7 @@ plotly>=6.0
 pandas>=2.2
 pyarrow>=16
 requests>=2.32
+cassandra-driver>=3.29
+pyhive[hive_pure_sasl]>=0.7
 matplotlib>=3.9
 playwright>=1.45   # optional: screenshots only

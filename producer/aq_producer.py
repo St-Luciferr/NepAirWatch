@@ -23,10 +23,9 @@ import time
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
-import requests
-from confluent_kafka import Producer
-
-from common.config import CITIES, KAFKA_BOOTSTRAP, ROOT, TOPIC_RAW
+from common.config import CITIES, ROOT, TOPIC_RAW
+from producer.common import build_producer, http_get, now_utc_iso
+from producer.common import publish as _publish
 
 AQ_URL = "https://air-quality-api.open-meteo.com/v1/air-quality"
 WX_URL = "https://historical-forecast-api.open-meteo.com/v1/forecast"
@@ -46,17 +45,8 @@ FIELD_MAP = {
 }
 
 
-def _get(url, params, retries=6):
-    for attempt in range(retries):
-        try:
-            r = requests.get(url, params=params, timeout=60)
-            r.raise_for_status()
-            return r.json()
-        except requests.RequestException as e:
-            wait = 2 ** attempt * 5
-            print(f"  ! {e} — retrying in {wait}s")
-            time.sleep(wait)
-    raise RuntimeError(f"failed to fetch {url}")
+def _get(url, params):
+    return http_get(url, params)
 
 
 def fetch_city(city, lat, lon, start: date, end: date):
@@ -88,29 +78,12 @@ def make_message(city, province, lat, lon, rec, source):
         "city": city, "province": province, "lat": lat, "lon": lon,
         **rec,
         "source": source,
-        "ingest_time": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "ingest_time": now_utc_iso(),
     }
 
 
-def build_producer():
-    return Producer({
-        "bootstrap.servers": KAFKA_BOOTSTRAP,
-        "linger.ms": 50,
-        "compression.type": "lz4",
-        "acks": "all",
-        "enable.idempotence": True,
-    })
-
-
-def _delivery(err, msg):
-    if err is not None:
-        print(f"  ! delivery failed: {err}")
-
-
 def publish(producer, msg):
-    producer.produce(TOPIC_RAW, key=msg["city"].encode(), value=json.dumps(msg).encode(),
-                     on_delivery=_delivery)
-    producer.poll(0)
+    _publish(producer, TOPIC_RAW, msg["city"], msg)
 
 
 # ----------------------------------------------------------------------------- modes
@@ -173,8 +146,7 @@ def replay(days: int, speed: float):
     print(f"[replay] {len(hours)} hours × {len(CITIES)} cities, 1 hour every {speed}s")
     for h in hours:
         for m in by_hour[h]:
-            m = {**m, "source": "open-meteo/replay",
-                 "ingest_time": datetime.now(timezone.utc).isoformat(timespec="seconds")}
+            m = {**m, "source": "open-meteo/replay", "ingest_time": now_utc_iso()}
             publish(producer, m)
         producer.flush()
         worst = max(by_hour[h], key=lambda x: x["pm2_5"] or 0)

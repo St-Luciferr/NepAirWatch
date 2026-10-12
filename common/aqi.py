@@ -42,3 +42,44 @@ def category(aqi):
     for hi, name, color, adv_en, adv_ne in CATEGORIES:
         if aqi <= hi:
             return {"category": name, "color": color, "advice_en": adv_en, "advice_ne": adv_ne}
+
+
+# Prescriptive analytics: who should do what when a category is *forecast* (audience, action).
+ACTIONS = {
+    "Moderate": [
+        ("Public", "Unusually sensitive people: plan lighter outdoor activity."),
+    ],
+    "Unhealthy for Sensitive Groups": [
+        ("Schools", "Move PE and sports indoors for children with asthma."),
+        ("Hospitals", "Remind COPD / asthma patients to keep reliever inhalers at hand."),
+        ("Public", "Children, elderly and heart / lung patients: reduce outdoor exertion."),
+    ],
+    "Unhealthy": [
+        ("Schools", "Cancel outdoor assemblies and sports; keep windows closed during peak hours."),
+        ("Hospitals", "Increase respiratory OPD staffing and nebuliser capacity."),
+        ("Municipality", "Enforce the open-burning ban; water roads and construction sites to suppress dust."),
+        ("Public", "Wear an N95 mask outdoors; avoid jogging near traffic."),
+        ("Alert service", "Send SMS / app push to subscribers of nepal.air.alerts."),
+    ],
+    "Very Unhealthy": [
+        ("Schools", "Consider closure or online classes."),
+        ("Hospitals", "Activate the air-pollution surge plan."),
+        ("Municipality", "Halt brick kilns and construction; restrict diesel trucks / odd-even traffic."),
+        ("Public", "Stay indoors, use air purifiers, avoid all outdoor exertion."),
+        ("Alert service", "Broadcast a public health warning (radio, SMS, Viber)."),
+    ],
+    "Hazardous": [
+        ("Government", "Declare a health emergency; close schools and non-essential outdoor work."),
+        ("Hospitals", "Emergency footing for respiratory and cardiac cases."),
+        ("Public", "Remain indoors; vulnerable people should relocate if possible."),
+        ("Alert service", "Broadcast an emergency alert on every channel."),
+    ],
+}
+
+
+def recommended_actions(category_name, worsening=False):
+    """Actions for a forecast category; a worsening trend adds a pre-emptive step."""
+    acts = list(ACTIONS.get(category_name, []))
+    if worsening and category_name not in ("Good", "Moderate"):
+        acts.insert(0, ("Disaster mgmt.", "Air quality is forecast to worsen — issue the early warning now."))
+    return acts

@@ -1,13 +1,21 @@
 # NepAirWatch — the whole platform with one command:   docker compose up -d
+# Full Hadoop ecosystem (adds YARN + MapReduce and Hive):  docker compose --profile full up -d
 #
-#   kafka, kafka-ui, mongodb      infrastructure
-#   kafka-init                    creates the topics (one-shot)
-#   backfill                      loads 1 year of history into Kafka on first start (one-shot)
-#   producer-live                 polls the live APIs every 15 min → Kafka
-#   spark-streaming               Spark Structured Streaming: Kafka → Parquet lake + MongoDB + alerts
-#   spark-batch                   Spark batch analytics + MLlib forecast (after backfill, then every 6 h)
-#   dashboard                     Streamlit on http://localhost:8501
-#   replay  (profile "demo")      docker compose run --rm replay   → fast re-stream for live demos
+# INGESTION        kafka, kafka-ui, kafka-init (topics)    flume (FIRMS spool dir → Kafka + HDFS)
+#   producers      backfill + producer-live   Open-Meteo CAMS air quality + weather, hourly, 15 cities
+#                  producer-ground            DoEnv Nepal stations + Sensor.Community, 1-minute
+#                  producer-fires             NASA FIRMS hotspots → Flume
+#                  producer-news              news headlines (text)
+#                  power-loader               25 years of NASA POWER AOD/climate → HDFS raw zone (one-shot)
+# STORAGE          namenode, datanode, hdfs-init   HDFS data lake (raw / lake / curated zones)
+#                  cassandra, cassandra-init       time-series store for ground sensors
+#                  mongodb                         serving layer for the dashboard
+# PROCESSING       spark-streaming   Spark Structured Streaming (speed layer)
+#                  spark-batch       Spark SQL + MLlib (batch layer), then every 6 h
+#   profile mapreduce|full   resourcemanager, nodemanager, mapreduce (Hadoop Streaming job on YARN)
+#   profile hive|full        hive (HiveServer2), hive-init (external tables over the lake)
+# PRESENTATION     dashboard  http://localhost:8501
+#   profile demo   docker compose run --rm replay   → fast re-stream for live demos
 
 x-app: &app
   build: .
@@ -16,13 +24,29 @@ x-app: &app
   environment: &app-env
     KAFKA_BOOTSTRAP: kafka:29092
     MONGO_URI: mongodb://mongodb:27017
-    LAKE_PATH: /app/data/lake
-    CHECKPOINT_PATH: /app/data/checkpoints
+    CASSANDRA_HOSTS: cassandra
+    LAKE_PATH: hdfs://namenode:9000/nepairwatch/lake
+    RAW_PATH: hdfs://namenode:9000/nepairwatch/raw
+    CHECKPOINT_PATH: hdfs://namenode:9000/nepairwatch/checkpoints
+    WEBHDFS_URL: http://namenode:9870
+    SPOOL_DIR: /app/data/spool
+    STATE_DIR: /app/data/state
+    HIVE_HOST: hive
+    YARN_URL: http://resourcemanager:8088
+    FLUME_METRICS_URL: http://flume:34545/metrics
+    FIRMS_MAP_KEY: ${FIRMS_MAP_KEY:-}
     BACKFILL_DAYS: ${BACKFILL_DAYS:-365}
   volumes:
     - app_data:/app/data
 
+x-hadoop: &hadoop
+  build:
+    context: docker/hadoop
+    target: hadoop
+  image: nepairwatch-hadoop:latest
+
 services:
+  # ======================================================================= ingestion
   kafka:
     image: apache/kafka:3.8.0
     container_name: nepair-kafka
@@ -68,6 +92,130 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  kafka-init:
+    image: apache/kafka:3.8.0
+    container_name: nepair-kafka-init
+    depends_on:
+      kafka:
+        condition: service_healthy
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - |
+        for t in nepal.air.raw nepal.air.alerts nepal.ground.raw nepal.fires.raw nepal.news.raw; do
+          /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:29092 --create --if-not-exists \
+            --topic $$t --partitions 3 --replication-factor 1
+        done
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:29092 --list
+    restart: "no"
+
+  flume:
+    build:
+      context: docker/hadoop
+      target: flume
+    image: nepairwatch-flume:latest
+    container_name: nepair-flume
+    command: ["bash", "-c", "mkdir -p /appdata/spool/firms && exec flume-ng agent -n agent -c /opt/flume/conf
+              -f /flume/flume.conf -Dflume.root.logger=INFO,console
+              -Dflume.monitoring.type=http -Dflume.monitoring.port=34545"]
+    environment:
+      JAVA_OPTS: -Xms128m -Xmx384m
+    volumes:
+      - app_data:/appdata          # shared with producer-fires (spool directory)
+      - flume_data:/flume-data     # file channel
+      - ./flume:/flume:ro
+    depends_on:
+      kafka-init:
+        condition: service_completed_successfully
+      hdfs-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  # ======================================================================= storage
+  namenode:
+    <<: *hadoop
+    container_name: nepair-namenode
+    hostname: namenode
+    command: ["namenode"]
+    ports:
+      - "9870:9870"   # HDFS web UI / WebHDFS
+    environment:
+      HADOOP_HEAPSIZE_MAX: 512m
+    volumes:
+      - hdfs_name:/hadoop/dfs/name
+    healthcheck:
+      test: ["CMD-SHELL", "hdfs dfsadmin -safemode get | grep -q OFF"]
+      interval: 10s
+      timeout: 20s
+      retries: 30
+      start_period: 20s
+    restart: unless-stopped
+
+  datanode:
+    <<: *hadoop
+    container_name: nepair-datanode
+    hostname: datanode
+    command: ["datanode"]
+    ports:
+      - "9864:9864"
+    environment:
+      HADOOP_HEAPSIZE_MAX: 512m
+    volumes:
+      - hdfs_data:/hadoop/dfs/data
+    depends_on:
+      namenode:
+        condition: service_started
+    restart: unless-stopped
+
+  hdfs-init:
+    <<: *hadoop
+    container_name: nepair-hdfs-init
+    command:
+      - bash
+      - -c
+      - |
+        until hdfs dfsadmin -report 2>/dev/null | grep -q "Live datanodes (1)"; do
+          echo "waiting for a live DataNode..."; sleep 5
+        done
+        hdfs dfs -mkdir -p /nepairwatch/lake /nepairwatch/raw /nepairwatch/curated /nepairwatch/checkpoints
+        hdfs dfs -chmod -R 777 /nepairwatch
+        hdfs dfs -ls /nepairwatch
+    depends_on:
+      namenode:
+        condition: service_healthy
+      datanode:
+        condition: service_started
+    restart: "no"
+
+  cassandra:
+    image: cassandra:5.0
+    container_name: nepair-cassandra
+    ports:
+      - "9042:9042"
+    environment:
+      CASSANDRA_CLUSTER_NAME: nepairwatch
+      MAX_HEAP_SIZE: 768M
+      HEAP_NEWSIZE: 128M
+    volumes:
+      - cassandra_data:/var/lib/cassandra
+    healthcheck:
+      test: ["CMD-SHELL", "cqlsh -e 'describe keyspaces' >/dev/null 2>&1"]
+      interval: 15s
+      timeout: 10s
+      retries: 20
+      start_period: 60s
+    restart: unless-stopped
+
+  cassandra-init:
+    image: cassandra:5.0
+    container_name: nepair-cassandra-init
+    entrypoint: ["cqlsh", "cassandra", "-f", "/cql/schema.cql"]
+    volumes:
+      - ./cassandra:/cql:ro
+    depends_on:
+      cassandra:
+        condition: service_healthy
+    restart: "no"
+
   mongodb:
     image: mongo:7.0
     container_name: nepair-mongo
@@ -82,22 +230,7 @@ services:
       retries: 10
     restart: unless-stopped
 
-  kafka-init:
-    image: apache/kafka:3.8.0
-    container_name: nepair-kafka-init
-    depends_on:
-      kafka:
-        condition: service_healthy
-    entrypoint: ["/bin/bash", "-c"]
-    command:
-      - |
-        for t in nepal.air.raw nepal.air.alerts; do
-          /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:29092 --create --if-not-exists \
-            --topic $$t --partitions 3 --replication-factor 1
-        done
-        /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:29092 --list
-    restart: "no"
-
+  # ======================================================================= producers
   backfill:
     <<: *app
     container_name: nepair-backfill
@@ -116,6 +249,48 @@ services:
         condition: service_completed_successfully
     restart: unless-stopped
 
+  producer-ground:
+    <<: *app
+    container_name: nepair-producer-ground
+    command: ["docker/once_then.sh", "ground_backfill",
+              "python -u -m producer.ground_producer backfill --days ${GROUND_BACKFILL_DAYS:-20}",
+              "python", "-u", "-m", "producer.ground_producer", "live", "--interval", "${GROUND_INTERVAL:-600}"]
+    depends_on:
+      kafka-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  producer-fires:
+    <<: *app
+    container_name: nepair-producer-fires
+    command: ["docker/once_then.sh", "firms_backfill",
+              "python -u -m producer.firms_fetcher backfill --days ${FIRMS_BACKFILL_DAYS:-7}",
+              "python", "-u", "-m", "producer.firms_fetcher", "live", "--interval", "${FIRMS_INTERVAL:-10800}"]
+    depends_on:
+      flume:
+        condition: service_started
+    restart: unless-stopped
+
+  producer-news:
+    <<: *app
+    container_name: nepair-producer-news
+    command: ["python", "-u", "-m", "producer.news_producer", "live", "--interval", "${NEWS_INTERVAL:-1800}"]
+    depends_on:
+      kafka-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  power-loader:
+    <<: *app
+    container_name: nepair-power-loader
+    command: ["docker/once_then.sh", "power_loaded",
+              "python -u -m producer.power_loader --start ${POWER_START_YEAR:-2001}"]
+    depends_on:
+      hdfs-init:
+        condition: service_completed_successfully
+    restart: "no"
+
+  # ======================================================================= processing
   spark-streaming:
     <<: *app
     container_name: nepair-spark-streaming
@@ -124,6 +299,10 @@ services:
       - "4040:4040"   # Spark UI
     depends_on:
       kafka-init:
+        condition: service_completed_successfully
+      hdfs-init:
+        condition: service_completed_successfully
+      cassandra-init:
         condition: service_completed_successfully
       mongodb:
         condition: service_healthy
@@ -141,6 +320,89 @@ services:
         condition: service_started
     restart: unless-stopped
 
+  # --------------------------------------------------- YARN + MapReduce (profile: mapreduce / full)
+  resourcemanager:
+    <<: *hadoop
+    container_name: nepair-resourcemanager
+    hostname: resourcemanager
+    profiles: ["mapreduce", "full"]
+    command: ["resourcemanager"]
+    ports:
+      - "8088:8088"   # YARN UI
+    environment:
+      HADOOP_HEAPSIZE_MAX: 512m
+    depends_on:
+      hdfs-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  nodemanager:
+    <<: *hadoop
+    container_name: nepair-nodemanager
+    hostname: nodemanager
+    profiles: ["mapreduce", "full"]
+    command: ["nodemanager"]
+    ports:
+      - "8042:8042"
+    environment:
+      HADOOP_HEAPSIZE_MAX: 512m
+    depends_on:
+      resourcemanager:
+        condition: service_started
+    restart: unless-stopped
+
+  mapreduce:
+    <<: *hadoop
+    container_name: nepair-mapreduce
+    profiles: ["mapreduce", "full"]
+    command: ["/mapreduce/run_aod_job.sh"]
+    environment:
+      MR_INTERVAL: ${MR_INTERVAL:-86400}
+    volumes:
+      - ./mapreduce:/mapreduce:ro
+    depends_on:
+      nodemanager:
+        condition: service_started
+    restart: unless-stopped
+
+  # --------------------------------------------------- Apache Hive (profile: hive / full)
+  hive:
+    image: apache/hive:4.0.1
+    container_name: nepair-hive
+    hostname: hive
+    profiles: ["hive", "full"]
+    ports:
+      - "10000:10000"   # HiveServer2 (JDBC / Thrift)
+      - "10002:10002"   # HiveServer2 web UI
+    environment:
+      SERVICE_NAME: hiveserver2
+      SERVICE_OPTS: -Dhive.server2.enable.doAs=false -Xmx1g
+    volumes:
+      - ./hive:/hive:ro
+    depends_on:
+      hdfs-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  hive-init:
+    image: apache/hive:4.0.1
+    container_name: nepair-hive-init
+    profiles: ["hive", "full"]
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - |
+        until /opt/hive/bin/beeline -u jdbc:hive2://hive:10000 -e "show databases" >/dev/null 2>&1; do
+          echo "waiting for HiveServer2..."; sleep 10
+        done
+        /opt/hive/bin/beeline -u jdbc:hive2://hive:10000 -f /hive/init.hql
+    volumes:
+      - ./hive:/hive:ro
+    depends_on:
+      hive:
+        condition: service_started
+    restart: "no"
+
+  # ======================================================================= presentation
   dashboard:
     <<: *app
     container_name: nepair-dashboard
@@ -167,3 +429,7 @@ volumes:
   kafka_data:
   mongo_data:
   app_data:
+  hdfs_name:
+  hdfs_data:
+  cassandra_data:
+  flume_data:

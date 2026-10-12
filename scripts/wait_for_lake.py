@@ -1,60 +1,38 @@
-"""Block until the Parquet lake holds >= N rows and has stopped growing (streaming sink caught up).
+"""Block until the streaming lake sink has written >= N rows and has stopped growing.
 
-Only files committed in Spark's file-sink log (_spark_metadata) are counted, so files that are
-still being written (or were left behind by a crashed job) are ignored.
+The streaming job's StreamingQueryListener keeps a cumulative row counter per query in MongoDB
+`stream_totals`, so this works the same whether the lake lives on HDFS or on the local disk.
+
+Usage:  python scripts/wait_for_lake.py <min_rows> [query_name]   (default query: lake_sink)
 """
-import json
 import sys
 import time
 from pathlib import Path
-from urllib.parse import unquote, urlparse
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-import pyarrow.parquet as pq  # noqa: E402
+from pymongo import MongoClient  # noqa: E402
+from pymongo.errors import PyMongoError  # noqa: E402
 
-from common.config import LAKE_PATH  # noqa: E402
-
-LAKE = Path(LAKE_PATH) / "air_quality"
-META = LAKE / "_spark_metadata"
-_rows = {}  # path -> row count (committed files never change, so cache them)
+from common.config import MONGO_DB, MONGO_URI  # noqa: E402
 
 
-def committed_files():
-    files = set()
-    if not META.exists():
-        return files
-    for log in META.iterdir():
-        try:
-            for line in log.read_text().splitlines()[1:]:  # first line is the version marker "v1"
-                entry = json.loads(line)
-                path = unquote(urlparse(entry["path"]).path)
-                if entry.get("action") == "delete":
-                    files.discard(path)
-                else:
-                    files.add(path)
-        except (OSError, ValueError):
-            continue  # log file being written right now; pick it up next round
-    return files
-
-
-def count_rows():
-    total = 0
-    for f in committed_files():
-        if f not in _rows:
-            try:
-                _rows[f] = pq.ParquetFile(f).metadata.num_rows
-            except Exception:  # noqa: BLE001 — unreadable/in-flight file, retry next round
-                continue
-        total += _rows[f]
-    return total
+def committed_rows(db, query):
+    doc = db.stream_totals.find_one({"_id": query})
+    return doc["rows"] if doc else 0
 
 
 def main():
     target = int(sys.argv[1])
+    query = sys.argv[2] if len(sys.argv) > 2 else "lake_sink"
+    db = MongoClient(MONGO_URI, serverSelectionTimeoutMS=5000)[MONGO_DB]
     last = -1
     while True:
-        n = count_rows()
-        print(f"  lake rows committed: {n:,}", flush=True)
+        try:
+            n = committed_rows(db, query)
+        except PyMongoError as e:
+            print(f"  MongoDB not ready: {e}", flush=True)
+            n = -1
+        print(f"  {query}: {n:,} rows written", flush=True)
         if n >= target and n == last:
             return
         last = n

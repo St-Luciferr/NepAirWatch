@@ -9,7 +9,9 @@ Reads the Parquet data lake written by the streaming job and produces:
   5. weather_corr       — Pearson correlation of PM2.5 with weather drivers
   6. model_metrics      — GBT regressor forecasting PM2.5 6 hours ahead vs persistence baseline
   7. forecasts          — latest 6-h-ahead forecast per city (early warning)
+  8. advisories         — prescriptive analytics: recommended actions per audience from the forecast
 All outputs → MongoDB (serving) and Parquet (data lake /curated zone).
+Multi-source analytics (ground stations, fires, AOD, news) live in fusion_analytics.py.
 
 Run:  python spark_jobs/batch_analytics.py
 """
@@ -28,23 +30,12 @@ from pyspark.ml.regression import GBTRegressor  # noqa: E402
 from pyspark.sql import Window  # noqa: E402
 from pyspark.sql import functions as F  # noqa: E402
 
-from spark_common import aqi_expr, build_spark, category_expr  # noqa: E402
-from common.config import (LAKE_PATH, MONGO_DB, MONGO_URI, NEPAL_PM25_24H,  # noqa: E402
-                           WHO_PM25_24H, ROOT)
+from spark_common import aqi_expr, build_spark, category_expr, to_mongo  # noqa: E402
+from common.aqi import recommended_actions  # noqa: E402
+from common.config import (KATHMANDU_VALLEY, LAKE_PATH, MONGO_DB, MONGO_URI,  # noqa: E402
+                           NEPAL_PM25_24H, TERAI, WHO_PM25_24H, ROOT)
 
 HORIZON = 6  # hours ahead to forecast
-
-
-def to_mongo(db, name, df):
-    docs = [r.asDict(recursive=True) for r in df.collect()]
-    for d in docs:
-        for k, v in d.items():
-            if hasattr(v, "isoformat") and not isinstance(v, datetime):
-                d[k] = v.isoformat()
-    db[name].delete_many({})
-    if docs:
-        db[name].insert_many(docs)
-    print(f"  → mongo.{name}: {len(docs)} docs")
 
 
 def main():
@@ -101,9 +92,8 @@ def main():
     drivers = ["boundary_layer_height", "wind_speed", "humidity", "temperature", "precipitation"]
     corr_rows = []
     for region, cond in [("All Nepal", F.lit(True)),
-                         ("Kathmandu Valley", F.col("city").isin("Kathmandu", "Lalitpur", "Bhaktapur")),
-                         ("Terai", F.col("city").isin("Biratnagar", "Janakpur", "Birgunj", "Nepalgunj",
-                                                      "Dhangadhi", "Mahendranagar", "Butwal"))]:
+                         ("Kathmandu Valley", F.col("city").isin(*KATHMANDU_VALLEY)),
+                         ("Terai", F.col("city").isin(*TERAI))]:
         sub = df.filter(cond).na.drop(subset=drivers + ["pm2_5"])
         for d in drivers:
             corr_rows.append({"region": region, "driver": d,
@@ -186,6 +176,16 @@ def main():
     to_mongo(db, "forecasts", fc.withColumn("from_ts", F.date_format("from_ts", "yyyy-MM-dd HH:mm"))
              .withColumn("for_ts", F.date_format("for_ts", "yyyy-MM-dd HH:mm")))
     fc.show(20, truncate=False)
+
+    # 8. Prescriptive analytics: forecast → recommended actions per audience
+    adv = []
+    for r in fc.collect():
+        worsening = r["pm25_forecast"] > r["pm25_now"] * 1.05
+        for prio, (audience, action) in enumerate(recommended_actions(r["category_forecast"], worsening), 1):
+            adv.append({"city": r["city"], "province": r["province"], "for_ts": f"{r['for_ts']:%Y-%m-%d %H:%M}",
+                        "aqi_forecast": r["aqi_forecast"], "category_forecast": r["category_forecast"],
+                        "worsening": worsening, "priority": prio, "audience": audience, "action": action})
+    to_mongo(db, "advisories", adv)
 
     # curated zone of the lake (analytics-ready tables)
     monthly.write.mode("overwrite").parquet(f"{curated}/monthly_city")
