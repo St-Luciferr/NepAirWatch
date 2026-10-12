@@ -73,6 +73,7 @@ whole lake.
 ```text
 common/            config (cities, topics, paths), AQI + advisories + recommended actions, geo, storage (WebHDFS)
 producer/          aq_producer.py (Open-Meteo) · ground_producer.py (DoEnv + Sensor.Community) · demo_simulator.py
+demo_ui/           app.py — demo control panel (Streamlit, :8502)
                    firms_fetcher.py (NASA FIRMS → Flume) · news_producer.py (RSS) · power_loader.py (NASA POWER → HDFS)
 spark_jobs/        stream_processor.py — speed layer (8 streaming queries)
                    batch_analytics.py  — CAMS analytics, GBT forecast, prescriptive advisories
@@ -192,6 +193,20 @@ Spark UI → Fires tab + HDFS browser → Ground stations (Cassandra) → YARN �
 Demo records are tagged (`source = demo/…`, network `demo`). The daily statistics and every batch
 job ignore them, so analytics and models are never affected. `cleanup` removes them from MongoDB and
 Cassandra.
+
+**Interactive control panel.** To choose exactly what to send, run
+`docker compose --profile control up -d` and open <http://localhost:8502> next to the dashboard:
+
+| Tab | Sends | Choose |
+| --- | --- | --- |
+| 🎬 Scenarios | several topics at once | clean country · Kathmandu Valley smog · forest-fire season · Terai haze · rain |
+| 🌐 City readings | `nepal.air.raw` | an AQI level per city (editable table + map preview), rounds, interval, variation |
+| 🛰️ Ground stations | `nepal.ground.raw` | demo stations, AQI level, live minutes or a full past hour (triggers a measured alert) |
+| 🔥 Fires | `nepal.fires.raw` | city, number, radius, intensity, via Flume or Kafka direct |
+| 📰 News | `nepal.news.raw` | a headline |
+
+After each send, the panel waits until Spark has written the results to MongoDB and shows how long the
+pipeline took. The 🧹 button in the sidebar removes all demo data.
 
 Other ways to show data flowing: `scripts/watch_pipeline.sh` (the same monitor panes without the
 simulator) and `docker compose run --rm replay` (re-streams 2 days of real data; the throughput bars

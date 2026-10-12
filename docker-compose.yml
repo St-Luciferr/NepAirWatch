@@ -15,7 +15,8 @@
 #   profile mapreduce|full   resourcemanager, nodemanager, mapreduce (Hadoop Streaming job on YARN)
 #   profile hive|full        hive (HiveServer2), hive-init (external tables over the lake)
 # PRESENTATION     dashboard  http://localhost:8501
-#   profile demo   docker compose run --rm replay   → fast re-stream for live demos
+#   profile control  demo-control  http://localhost:8502 — send demo data at any AQI level
+#   profile demo     docker compose run --rm replay   → fast re-stream for live demos
 
 x-app: &app
   build: .
@@ -411,6 +412,21 @@ services:
     ports:
       - "8501:8501"
     depends_on:
+      mongodb:
+        condition: service_healthy
+    restart: unless-stopped
+
+  demo-control:                # profile "control": docker compose --profile control up -d → :8502
+    <<: *app
+    container_name: nepair-demo-control
+    profiles: ["control"]
+    command: ["streamlit", "run", "demo_ui/app.py", "--server.address=0.0.0.0",
+              "--server.port=8502", "--server.headless=true"]
+    ports:
+      - "8502:8502"
+    depends_on:
+      kafka-init:
+        condition: service_completed_successfully
       mongodb:
         condition: service_healthy
     restart: unless-stopped

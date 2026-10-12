@@ -83,3 +83,12 @@ def recommended_actions(category_name, worsening=False):
     if worsening and category_name not in ("Good", "Moderate"):
         acts.insert(0, ("Disaster mgmt.", "Air quality is forecast to worsen — issue the early warning now."))
     return acts
+
+
+def aqi_to_pm25(aqi):
+    """Inverse of pm25_to_aqi: the PM2.5 (µg/m³) that produces a given AQI (used by the demo tools)."""
+    aqi = max(0, min(500, aqi))
+    for c_lo, c_hi, i_lo, i_hi in PM25_BREAKPOINTS:
+        if aqi <= i_hi:
+            return round(c_lo + (aqi - i_lo) * (c_hi - c_lo) / (i_hi - i_lo), 1)
+    return PM25_BREAKPOINTS[-1][1]

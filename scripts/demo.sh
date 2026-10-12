@@ -72,7 +72,7 @@ case "${1:-10}" in
     exec bash ;;
 esac
 
-MIN=$1
+MIN=${1:-10}
 [[ "$MIN" =~ ^[0-9]+$ ]] || { echo "usage: scripts/demo.sh [minutes] | cleanup"; exit 1; }
 for s in kafka mongodb spark-streaming dashboard "$APP"; do
   running "$s" || { echo "service '$s' is not running — start the stack first: docker compose up -d"; exit 1; }

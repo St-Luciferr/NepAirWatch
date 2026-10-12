@@ -26,7 +26,8 @@ COPY common ./common
 COPY producer ./producer
 COPY spark_jobs ./spark_jobs
 COPY dashboard ./dashboard
-COPY scripts/wait_for_lake.py scripts/hive_refresh.py ./scripts/
+COPY scripts/wait_for_lake.py scripts/hive_refresh.py scripts/demo_cleanup.py ./scripts/
+COPY demo_ui ./demo_ui
 COPY hive/queries.hql ./hive/queries.hql
 COPY docker ./docker
 COPY .streamlit ./.streamlit
