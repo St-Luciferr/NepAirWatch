@@ -339,8 +339,8 @@ with tab_ground:
             v1, v2 = st.columns([3, 2])
             with v1:
                 st.dataframe(val, hide_index=True, use_container_width=True)
-                st.caption("bias = model − measured (µg/m³). Negative bias: the 40 km model under-estimates "
-                           "local pollution in the valley.")
+                st.caption("bias = model − measured (µg/m³). Positive: the 40 km model over-estimates the "
+                           "station; negative: it under-estimates.")
             with v2:
                 if cm:
                     st.metric("Calibrated RMSE (µg/m³)", cm["rmse"], f"{cm['rmse'] - cm['raw_rmse']:+.1f} vs raw CAMS",
