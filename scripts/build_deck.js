@@ -149,29 +149,32 @@ async function icon(Comp, color, size = 256) {
   // ================================================================ 4 Data sources
   pres.addSection({ title: "Design" });
   s = pres.addSlide({ masterName: "CONTENT", sectionTitle: "Design" });
-  s.addText("Data sources: 15 cities across all 7 provinces", { placeholder: "title" });
+  s.addText("Data sources: six real sources, 15 cities, all 7 provinces", { placeholder: "title" });
   const srcs = [
-    [fa.FaSatellite, "Open-Meteo Air-Quality API", "Copernicus CAMS model · PM2.5, PM10, CO, NO₂, SO₂, O₃, dust · hourly", HEX.accent2],
-    [fa.FaCloudSun, "Open-Meteo Weather APIs", "Temperature, humidity, wind, rain, boundary-layer height · hourly", HEX.accent3],
-    [fa.FaBroadcastTower, "Extensions (same topic)", "DoEnv ground stations · low-cost IoT sensors · NASA FIRMS fires", HEX.accent4],
+    [fa.FaSatellite, "Open-Meteo · CAMS model", "EU Copernicus air-quality model + weather: PM2.5, PM10, gases, mixing height · hourly, 15 cities · 1 yr + live → Kafka", HEX.accent2],
+    [fa.FaBroadcastTower, "DoEnv Nepal stations", "Government reference monitors, ~30 sites, all 7 provinces · PM1 / PM2.5 / PM10 every minute · ground truth → Kafka", HEX.accent3],
+    [fa.FaUsers, "Sensor.Community", "Low-cost citizen sensors (SDS011) in Kathmandu and Madhesh · PM2.5 / PM10 every ~5 min → Kafka", HEX.accent4],
+    [fa.FaFire, "NASA FIRMS fires", "VIIRS + MODIS satellite fire hotspots over Nepal and the Indo-Gangetic Plain · CSV files → Flume → Kafka + HDFS", HEX.accent1],
+    [fa.FaGlobeAsia, "NASA POWER", "Daily aerosol optical depth (haze) + climate per city, 2001 → today (25 years) · bulk-loaded into HDFS", HEX.accent5],
+    [fa.FaNewspaper, "Google News RSS", "Headlines on pollution, haze, fires and brick kilns · unstructured text → Kafka → Spark NLP / LDA", HEX.dk2],
   ];
-  for (let i = 0; i < 3; i++) {
+  for (let i = 0; i < srcs.length; i++) {
     const [Ic, h, b, col] = srcs[i];
-    const y = 1.5 + i * 1.5;
-    await iconCircle(s, Ic, 0.6, y, 0.95, col, HEX.lt1, `source ${i + 1}`);
-    s.addText(h, { x: 1.8, y: y, w: 5.2, h: 0.45, fontSize: 18, bold: true, color: C.text1, margin: 0, isTextBox: true, objectName: `source ${i + 1} head` });
-    s.addText(b, { x: 1.8, y: y + 0.45, w: 5.2, h: 0.7, fontSize: 14, color: C.text2, margin: 0, valign: "top", isTextBox: true, objectName: `source ${i + 1} body` });
+    const x = 0.6 + (i % 2) * 3.85, y = 1.45 + Math.floor(i / 2) * 1.5;
+    await iconCircle(s, Ic, x, y, 0.7, col, HEX.lt1, `source ${i + 1}`);
+    s.addText(h, { x: x + 0.85, y: y, w: 2.9, h: 0.4, fontSize: 15, bold: true, color: C.text1, margin: 0, isTextBox: true, objectName: `source ${i + 1} head` });
+    s.addText(b, { x: x + 0.85, y: y + 0.42, w: 2.9, h: 1.0, fontSize: 11, color: C.text2, margin: 0, valign: "top", isTextBox: true, objectName: `source ${i + 1} body` });
   }
-  card(s, 7.5, 1.5, 5.2, 4.4, "volume card", C.text1);
-  const vol = [[fmt(D.readings), "city-hour records ingested (1 year)"], ["17", "attributes per record"],
-    [`${fmt(D.lake_files)} files · ${D.lake_mb} MB`, "partitioned Parquet lake"]];
+  card(s, 8.35, 1.45, 4.35, 4.4, "volume card", C.text1);
+  const vol = [["131,700", "hourly CAMS + weather records (1 year)"], ["~700,000", "1-minute ground readings (+~45k a day)"],
+    ["141,195", "NASA POWER city-days, 2001 → today"], ["1,275 · 383", "fire hotspots (7 days) · news articles"]];
   vol.forEach(([v, l], i) => {
-    s.addText(v, { x: 7.9, y: 1.8 + i * 1.35, w: 4.6, h: 0.65, fontSize: i === 2 ? 26 : 36, bold: true, color: C.accent1, margin: 0, isTextBox: true, objectName: `volume ${i + 1}` });
-    s.addText(l, { x: 7.9, y: 2.45 + i * 1.35, w: 4.6, h: 0.4, fontSize: 14, color: C.background2, margin: 0, isTextBox: true, objectName: `volume ${i + 1} label` });
+    s.addText(v, { x: 8.65, y: 1.6 + i * 1.05, w: 3.85, h: 0.55, fontSize: 28, bold: true, color: C.accent1, margin: 0, isTextBox: true, objectName: `volume ${i + 1}` });
+    s.addText(l, { x: 8.65, y: 2.13 + i * 1.05, w: 3.85, h: 0.35, fontSize: 12, color: C.background2, margin: 0, isTextBox: true, objectName: `volume ${i + 1} label` });
   });
   s.addText("Koshi: Biratnagar, Dharan · Madhesh: Janakpur, Birgunj · Bagmati: Kathmandu, Lalitpur, Bhaktapur, Hetauda, Bharatpur · Gandaki: Pokhara · Lumbini: Butwal, Nepalgunj · Karnali: Surkhet · Sudurpashchim: Dhangadhi, Mahendranagar",
     { x: 0.6, y: 6.1, w: 12.1, h: 0.7, fontSize: 12, color: C.text2, italic: true, margin: 0, isTextBox: true, objectName: "city list" });
-  s.addNotes("Free public APIs, no key, fully reproducible. Producer merges air quality + weather per city-hour into one JSON message. Velocity: hourly per city, live polling every 15 min; volume grows without bound; variety: pollutants + meteorology + future sensors.");
+  s.addNotes("Six free, real public sources of four kinds. MODEL: Open-Meteo serves the EU Copernicus CAMS model, which gives hourly PM2.5 and weather (incl. boundary-layer height) for every city, but on a ~40 km grid. MEASURED: DoEnv government stations (1-minute) and Sensor.Community citizen sensors are the ground truth used to validate and calibrate CAMS; the DoEnv API keeps only ~3 weeks, so our HDFS lake becomes the archive. SATELLITE: NASA FIRMS fire hotspots arrive as CSV files, so they go through Flume (fan-out to Kafka and HDFS); NASA POWER gives 25 years of aerosol data, bulk-loaded straight into HDFS. TEXT: Google News headlines for theme tagging and LDA topics. Each source is fetched historically (back-fill) and live (polling). Volume, velocity and variety: ~1M records on the first start, 1-minute streams, and JSON, CSV and text.");
 
   // ================================================================ 5 Design features
   s = pres.addSlide({ masterName: "CONTENT", sectionTitle: "Design" });

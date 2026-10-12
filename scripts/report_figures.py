@@ -106,4 +106,44 @@ ax.set_title("Kathmandu: daily mean PM2.5 over the past year (Spark streaming wi
 ax.legend(frameon=False)
 fig.tight_layout(); fig.savefig(OUT / "kathmandu_daily.png"); plt.close(fig)
 
+# 8 CAMS vs measured: bias per ground station
+cv = df("cams_validation").dropna(subset=["city"]).sort_values("bias")
+if not cv.empty:
+    fig, ax = plt.subplots(figsize=(8, 4.2))
+    ax.barh(cv["station"] + " (" + cv["city"] + ")", cv["bias"],
+            color=["#2e86c1" if b < 0 else "#e67e22" for b in cv["bias"]])
+    ax.axvline(0, color="black", lw=0.8)
+    ax.set_xlabel("bias = CAMS − measured PM2.5 (µg/m³)")
+    ax.set_title("CAMS model vs DoEnv ground stations (positive = model over-estimates)")
+    fig.tight_layout(); fig.savefig(OUT / "cams_bias.png"); plt.close(fig)
+
+# 9 calibration: raw CAMS vs MLlib-calibrated on hold-out hours
+cs = df("calibration_sample")
+cm = db.calibration_metrics.find_one()
+if not cs.empty and cm:
+    fig, ax = plt.subplots(figsize=(6.2, 5))
+    ax.scatter(cs["ground_pm25"], cs["cams_pm25"], s=7, alpha=0.4, color="#e67e22",
+               label=f"raw CAMS (RMSE {cm['raw_rmse']})")
+    ax.scatter(cs["ground_pm25"], cs["calibrated_pm25"], s=7, alpha=0.4, color="#2e86c1",
+               label=f"RF-calibrated (RMSE {cm['rmse']})")
+    mx = float(cs[["ground_pm25", "cams_pm25", "calibrated_pm25"]].max().max())
+    ax.plot([0, mx], [0, mx], ls="--", color="grey", lw=1)
+    ax.set_xlabel("measured PM2.5 (µg/m³)"); ax.set_ylabel("estimated PM2.5 (µg/m³)")
+    ax.set_title("Calibration on hold-out station-hours (dashed = perfect)")
+    ax.legend(frameon=False)
+    fig.tight_layout(); fig.savefig(OUT / "calibration.png"); plt.close(fig)
+
+# 10 25-year aerosol trend (NASA POWER, complete years only)
+ay = df("aod_yearly")
+if not ay.empty:
+    ay = ay[ay["days"] >= 360]
+    fig, ax = plt.subplots(figsize=(10, 3.8))
+    for c in ["Kathmandu", "Biratnagar", "Nepalgunj", "Pokhara"]:
+        s = ay[ay.city == c].sort_values("year")
+        ax.plot(s["year"], s["aod_mean"], marker="o", ms=3, label=c)
+    ax.set_ylabel("annual mean AOD (550 nm)")
+    ax.set_title("25 years of aerosol optical depth (NASA POWER, HDFS raw zone → Spark)")
+    ax.legend(frameon=False, ncol=4)
+    fig.tight_layout(); fig.savefig(OUT / "aod_trend.png"); plt.close(fig)
+
 print("figures →", OUT)
